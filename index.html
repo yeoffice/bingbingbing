@@ -470,8 +470,8 @@
   });
 
   /* ===== 排行榜：可选 Supabase API（全网共享，只显示活人当前冰封值），未配置回退本地榜 ===== */
-  var SUPA_URL='';   /* TODO: 填入你的 Supabase 项目 URL，如 https://xxxx.supabase.co */
-  var SUPA_KEY='';   /* TODO: 填入你的 anon public key（Settings → API） */
+  var SUPA_URL='https://rmrjnvjakmgsqbcsyvts.supabase.co/rest/v1/';   /* TODO: 填入你的 Supabase 项目 URL，如 https://xxxx.supabase.co */
+  var SUPA_KEY='sb_publishable_CMgpc6NxT3DI7A0woFR0hw_efHU2qyZ';   /* TODO: 填入你的 anon public key（Settings → API） */
   var SUPA_HDR={ apikey:SUPA_KEY, Authorization:'Bearer '+SUPA_KEY, 'content-type':'application/json' };
   var lastPushTs=0, pushBusy=false;
   function pushProgress(force){
