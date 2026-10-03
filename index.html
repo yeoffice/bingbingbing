@@ -145,10 +145,10 @@
   <div class="tip">
     每一次触发，都有 <b style="color:#bfe9ff">99%</b> 的概率让冰封值再涨一截 —— 它没有上限。<br>
     但那 <b style="color:#ffd98a">1%</b> 的「我 了 叹」一旦出现，<b style="color:#ff9b9b">冰封值立刻归零</b>且本局终结。<br>
-    每天有 <b style="color:#bfe9ff">2 条命</b>：第 1 条命终结后可复活换第 2 条命（从 0 开始），<br>
-    复活后再中「我 了 叹」＝ 当天结束，<b style="color:#bfe9ff">第二天 0 点后恢复 2 条命</b>。<br>
-    命没了冰封值清空且<b style="color:#ff9b9b">不找回</b>；首次游玩需设置用户名，排行榜禁止重复名称。<br>
-    排行榜只记录<b style="color:#bfe9ff">还活着的人</b>的当前冰封值，清零即掉榜；数据保存本地， <b style="color:#bfe9ff">输了明天再来</b> 。
+    每天有 <b style="color:#bfe9ff">2 条命</b>：第 1 条命终结后点复活，<b style="color:#bfe9ff">找回冰封值</b>继续（第 2 条命）<br>
+    复活后再中「我 了 叹」＝ 当天结束，冰封值清空且<b style="color:#ff9b9b">第二天不找回</b>，<b style="color:#bfe9ff">0 点后恢复 2 条命</b>。<br>
+    首次游玩需设置用户名，排行榜禁止重复名称。<br>
+    排行榜只记录<b style="color:#bfe9ff">还活着的人</b>的当前冰封值，清零即掉榜；数据保存本地，第二天 <b style="color:#bfe9ff">可重新再来。</b> 
   </div>
 </div>
 
@@ -160,7 +160,7 @@
     <button class="ov-btn" id="reviveBtn">复活</button>
     <button class="ov-btn" id="rankBtn">🏆 查看排行榜</button>
     <div id="ovRankLine" style="margin-top:8px;font-size:12px;color:#ffd98a;min-height:16px"></div>
-    <div class="ov-tip">每天 2 条命：命死冰封值清空、不找回，可用复活换第 2 条命（从 0 开始）<br>复活后再中「我 了 叹」＝ 当天结束，第二天 0 点后恢复 2 条命</div>
+    <div class="ov-tip">每天 2 条命：第 1 条命终结可<b>复活并找回</b>冰封值（第 2 条命）<br>第 2 条命再终结＝当天结束，清空的冰封值<b>第二天不找回</b>，0 点后恢复 2 条命</div>
   </div>
 </div>
 
@@ -213,6 +213,7 @@
       var e=parseInt(lsGet('ends'),10); if(!isNaN(e)&&e>0) st.ends=e;
       st.deadDate=lsGet('deadDate')||'';
       st.reviveDate=lsGet('reviveDate')||'';
+      var lf=parseFloat(lsGet('lastFz')); if(!isNaN(lf)&&lf>0) st.lastFz=lf; else st.lastFz=0;
     }catch(e){}
     st.shown=st.fz;
   }
@@ -222,6 +223,7 @@
 
   function doReset(){
     for(var i=0;i<KEYS.length;i++) lsDel(KEYS[i]);
+    lsDel('lastFz'); st.lastFz=0;
     try{ localStorage.removeItem('ice99_board'); }catch(e){}
     st.fz=0; st.shown=0; st.ends=0; st.revives=0; st.dead=false; st.deadDate=''; st.reviveDate='';
     elBtn.disabled=false; elOver.classList.add('hidden');
@@ -404,11 +406,11 @@
     play(A_SIGH); flash('warm'); spawnParts();
     elOrb.textContent='🔥'; pop(elOrb);
     elVerdict.className='warm'; elVerdict.textContent='我 了 叹'; pop(elVerdict);
-    saveState({ends:String(st.ends), fz:'0', deadDate:st.deadDate});
+    saveState({ends:String(st.ends), fz:'0', deadDate:st.deadDate, lastFz:String(before)});
     if(usedReviveToday()){
       elQuote.textContent='第二条命也没了 —— 今天结束，明天 0 点后恢复 2 条命';
     }else{
-      elQuote.textContent='1% 命中 —— 冰封值 '+fmt(before)+'% 已被清空（不找回），今天还剩 1 条命';
+      elQuote.textContent='1% 命中 —— 冰封值 '+fmt(before)+'% 被清空，点复活可找回（今天还剩 1 条命）';
     }
     syncUI();
     submitRank(true);              /* 死亡：分数清零，掉榜 */
@@ -430,9 +432,9 @@
     elOvEmoji.textContent='🔥';
     elOvTitle.textContent='我 了 叹 · 本局终结';
     if(usedReviveToday()){
-      elOvStat.innerHTML='共触发 <b>'+st.rolls+'</b> 次 · 被终结 <b>'+st.ends+'</b> 次<br>今天 <b>2 条命</b>都已用完，冰封值已清空<br><b style="color:#ffd98a">明天 0 点后恢复 2 条命</b>，重新冲';
+      elOvStat.innerHTML='共触发 <b>'+st.rolls+'</b> 次 · 被终结 <b>'+st.ends+'</b> 次<br>今天 <b>2 条命</b>都已用完，冰封值已清空（<b style="color:#ff9b9b">不找回</b>）<br><b style="color:#ffd98a">明天 0 点后恢复 2 条命</b>，重新冲';
     }else{
-      elOvStat.innerHTML='共触发 <b>'+st.rolls+'</b> 次 · 被终结 <b>'+st.ends+'</b> 次<br>冰封值 <b>'+fmt(st.lastFz||0)+'%</b> 已清空（不找回）<br><b style="color:#ffd98a">今天还剩 1 条命</b>，点下方复活从 0 继续';
+      elOvStat.innerHTML='共触发 <b>'+st.rolls+'</b> 次 · 被终结 <b>'+st.ends+'</b> 次<br>冰封值 <b>'+fmt(st.lastFz||0)+'%</b> 被清空 · <b style="color:#bfe9ff">复活可找回</b><br><b style="color:#ffd98a">今天还剩 1 条命</b>，点下方复活找回继续';
     }
     elRevive.style.display='block';
     syncReviveBtn();
@@ -447,18 +449,18 @@
     }
     elRevive.className='ov-btn';
     elRevive.disabled=false;
-    elRevive.textContent='👤 复活（第 2 条命 · 从 0 开始）';
+    elRevive.textContent='👤 复活（第 2 条命 · 找回 '+fmt(st.lastFz||0)+'%）';
   }
   function doRevive(){
-    st.fz=0;
+    st.fz = st.lastFz || 0;      /* 找回第 1 条命死前的冰封值 */
     st.revives++; st.dead=false;
     st.reviveDate=today(); st.deadDate='';
-    saveState({reviveDate:st.reviveDate, deadDate:'', ends:String(st.ends), fz:'0'});
+    saveState({reviveDate:st.reviveDate, deadDate:'', ends:String(st.ends), fz:String(Math.floor(st.fz))});
     elOver.classList.add('hidden');
     elBtn.disabled=false;
     elBtn.textContent='再 抽 一 次';
     elOrb.textContent='❄️'; elVerdict.className=''; elVerdict.textContent='复 活 成 功';
-    elQuote.textContent='第 2 条命：冰封值从 0 开始冲（再中「我 了 叹」＝ 明天再来）';
+    elQuote.textContent='复活成功：找回 '+fmt(st.fz)+'% 冰封值，接着冲！（今天再中即等明天）';
     flash('warm'); syncUI(); syncReviveBtn();
     submitRank(true);
     return true;
@@ -470,10 +472,10 @@
   });
 
   /* ===== 排行榜：可选 Supabase API（全网共享，只显示活人当前冰封值），未配置回退本地榜 ===== */
-  var SUPA_URL='https://rmrjnvjakmgsqbcsyvts.supabase.co';   /* TODO: 填入你的 Supabase 项目 URL，如 https://xxxx.supabase.co */
-  var SUPA_KEY='sb_publishable_CMgpc6NxT3DI7A0woFR0hw_efHU2qyZ';   /* TODO: 填入你的 anon public key（Settings → API） */
+  var SUPA_URL='https://rmrjnvjakmgsqbcsyvts.supabase.co';  /* Supabase 项目地址（不带 /rest/v1/） */
+  var SUPA_KEY='sb_publishable_CMgpc6NxT3DI7A0woFR0hw_efHU2qyZ';  /* Publishable key（公钥） */
   var SUPA_HDR={ apikey:SUPA_KEY, Authorization:'Bearer '+SUPA_KEY, 'content-type':'application/json' };
-  var lastPushTs=0, pushBusy=false;
+  var lastPushTs=0, pushBusy=false, lastApiSubmitErr='';
   function pushProgress(force){
     var now=Date.now();
     if(!force && now-lastPushTs<15000) return;
@@ -491,8 +493,14 @@
         fetch(SUPA_URL+'/rest/v1/ice_scores', {
           method:'POST', headers:Object.assign({Prefer:'resolution=merge-duplicates'}, SUPA_HDR),
           body:JSON.stringify([{ name:nick, score:score, ts:Date.now() }])
-        }).catch(function(){});
-      }catch(e){}
+        }).then(function(r){
+          return r.text().then(function(t){
+            if(!r.ok){
+              lastApiSubmitErr='分数提交失败 HTTP '+r.status+'：'+(t||'').slice(0,160);
+            } else { lastApiSubmitErr=''; }
+          });
+        }).catch(function(e){ lastApiSubmitErr='分数提交网络错误：'+(e&&e.message?e.message:e); });
+      }catch(e){ lastApiSubmitErr='分数提交异常：'+e; }
     }
     /* 本地兜底榜 */
     var board=loadBoard();
@@ -502,7 +510,11 @@
     pushBusy=false;
   }
   function showBoard(){
-    if(SUPA_URL && SUPA_KEY){ apiShow(); return; }
+    if(SUPA_URL && SUPA_KEY){
+      submitRank(true);            /* 先上报当前冰封值 */
+      setTimeout(apiShow, 700);    /* 等提交落地再拉榜 */
+      return;
+    }
     localShow();
   }
   function localShow(){
@@ -517,7 +529,7 @@
     list.sort(function(a,b){ return b.score-a.score; });
     var alive=list.slice(0,10), lines=[];
     if(!alive.length){
-      var txt='暂无存活玩家，快去冲冰封值（当前 '+fmt(st.fz)+'%）';
+      var txt='暂无存活玩家，快去冲冰封值（当前 '+fmt(st.fz)+'%）'+(lastApiSubmitErr?'<br><span style="color:#ff9b9b">'+lastApiSubmitErr+'</span>':'');
       elRankLine.innerHTML=txt; elOvRank.innerHTML=txt;
       return;
     }
@@ -538,10 +550,23 @@
   function apiShow(){
     var myScore=Math.floor(st.fz);
     fetch(SUPA_URL+'/rest/v1/ice_scores?select=name,score&score=gt.0&order=score.desc&limit=10', {headers:SUPA_HDR})
-      .then(function(r){ return r.json(); })
-      .then(function(list){
-        if(!Array.isArray(list)||!list.length){
-          var txt='全网暂无存活玩家，快去冲冰封值（当前 '+fmt(st.fz)+'%）';
+      .then(function(r){
+        return r.json().then(function(j){ return {ok:r.ok, status:r.status, data:j}; });
+      })
+      .then(function(res){
+        var list=res.data;
+        if(!Array.isArray(list)){
+          var em='';
+          if(list && list.code) em='API 错误 '+list.code+'：'+(list.message||'').slice(0,140);
+          else if(!res.ok) em='API 请求失败 HTTP '+res.status+'：'+(JSON.stringify(list)||'').slice(0,140);
+          else em='API 返回格式异常：'+(JSON.stringify(list)||'').slice(0,140);
+          em += lastApiSubmitErr?(' ｜ '+lastApiSubmitErr):'';
+          elRankLine.innerHTML='<span style="color:#ff9b9b">'+em+'</span>';
+          elOvRank.innerHTML='<span style="color:#ff9b9b">'+em+'</span>';
+          return;
+        }
+        if(!list.length){
+          var txt='全网暂无存活玩家（当前 '+fmt(st.fz)+'%）<br><span style="color:#ff9b9b">提示：若自己明明活着却看不到，多为分数未提交成功，见下</span>'+(lastApiSubmitErr?'<br><span style="color:#ff9b9b">'+lastApiSubmitErr+'</span>':'');
           elRankLine.innerHTML=txt; elOvRank.innerHTML=txt;
           return;
         }
@@ -563,7 +588,11 @@
           elOvRank.innerHTML='我已归零掉榜（当前 0%）<br>'+out;
         }
       })
-      .catch(function(){ elRankLine.textContent='榜单拉取失败，请检查 Supabase 配置'; });
+      .catch(function(e){
+        var em='榜单拉取失败：'+(e&&e.message?e.message:'网络错误');
+        elRankLine.innerHTML='<span style="color:#ff9b9b">'+em+'</span>';
+        elOvRank.innerHTML='<span style="color:#ff9b9b">'+em+'</span>';
+      });
   }
   elRankBtn.addEventListener('click', showBoard);
   elRankLine.addEventListener('click', showBoard);
@@ -600,6 +629,7 @@
     }
   })();
 })();
+
 
 
 </script>
