@@ -195,7 +195,9 @@
     <input class="reg-input" id="admSecret" type="password" placeholder="管理密钥">
     <div class="reg-err" id="admErr"></div>
     <button class="ov-btn" id="admBtn">生 成 卡 密</button>
-    <textarea id="admOut" rows="6" readonly placeholder="生成的卡密会显示在这里"></textarea>
+    <input class="reg-input" id="admCode" maxlength="24" placeholder="输入卡密查状态（留空＝列出全部）">
+    <button class="ov-btn" id="admQuery" style="background:rgba(255,255,255,.1);color:#bfdcf2;box-shadow:none;font-weight:600">🔍 查 询 卡 密</button>
+    <textarea id="admOut" rows="6" readonly placeholder="生成的卡密 / 查询结果会显示在这里"></textarea>
     <button class="ov-btn" id="admClose" style="background:rgba(255,255,255,.1);color:#8fb6d6;box-shadow:none">关 闭</button>
     <div class="ov-tip">卡密为一次性复活券：玩家每天 2 命用完后<br>输入卡密即可复活并找回死前的冰封值</div>
   </div>
@@ -227,7 +229,8 @@
   var elAdminMask=document.getElementById('adminMask'), elAdmCount=document.getElementById('admCount'),
       elAdmSecret=document.getElementById('admSecret'), elAdmErr=document.getElementById('admErr'),
       elAdmBtn=document.getElementById('admBtn'), elAdmOut=document.getElementById('admOut'),
-      elAdmClose=document.getElementById('admClose');
+      elAdmClose=document.getElementById('admClose'), elAdmCode=document.getElementById('admCode'),
+      elAdmQuery=document.getElementById('admQuery');
 
   /* ===== 状态：每天 2 条命。命死冰封值清空、不找回；复活只换第 2 条命（从 0 开始） ===== */
   var st = { fz:0, shown:0, rolls:0, ends:0, revives:0, pIce:0.99, dead:false, deadDate:'', reviveDate:'' };
@@ -602,6 +605,49 @@
     });
   });
   elAdmClose.addEventListener('click', function(){ elAdminMask.classList.add('hidden'); });
+  elAdmCode.addEventListener('keydown', function(e){ if(e.key==='Enter') elAdmQuery.click(); });
+  elAdmQuery.addEventListener('click', function(){
+    if(elAdmQuery.disabled) return;
+    var code=elAdmCode.value.trim();
+    elAdmErr.textContent='';
+    var url;
+    if(code){
+      url=SUPA_URL+'/rest/v1/ice_cards?select=code,used,used_by,used_at,created_at&code=eq.'+encodeURIComponent(code);
+    }else{
+      url=SUPA_URL+'/rest/v1/ice_cards?select=code,used,used_by,used_at,created_at&order=created_at.desc&limit=200';
+    }
+    elAdmQuery.disabled=true; elAdmErr.textContent='查询中…';
+    fetch(url, {headers:SUPA_HDR})
+      .then(function(r){ return r.json().then(function(j){ return {ok:r.ok, status:r.status, data:j}; }); })
+      .then(function(res){
+        elAdmQuery.disabled=false;
+        if(!res.ok){
+          var msg=(res.data && res.data.message) ? res.data.message : ((''+JSON.stringify(res.data)).slice(0,140));
+          elAdmErr.textContent='查询失败 HTTP '+res.status+'：'+msg;
+          return;
+        }
+        var list=Array.isArray(res.data)?res.data:[];
+        if(!list.length){
+          elAdmErr.textContent=code ? '没有这张卡：卡密不存在（注意大小写和横杠）' : '库里还没有任何卡密';
+          return;
+        }
+        var unused=0, lines=[];
+        for(var i=0;i<list.length;i++){
+          var c=list[i];
+          if(!c.used) unused++;
+          lines.push(c.code+' ｜ '+(c.used
+            ? ('已使用 · '+(c.used_by||'未知用户')+' · '+(''+(c.used_at||'')).replace('T',' ').slice(0,16))
+            : '未使用 ✅'));
+        }
+        elAdmOut.style.display='block';
+        elAdmOut.value=lines.join('\n');
+        elAdmErr.textContent='共 '+list.length+' 张，其中未使用 '+unused+' 张';
+      })
+      .catch(function(e){
+        elAdmQuery.disabled=false;
+        elAdmErr.textContent='查询网络错误：'+(e&&e.message?e.message:e);
+      });
+  });
 
   /* ===== 排行榜：可选 Supabase API（全网共享，只显示活人当前冰封值），未配置回退本地榜 ===== */
   var SUPA_URL='https://rmrjnvjakmgsqbcsyvts.supabase.co';  /* Supabase 项目地址（不带 /rest/v1/） */
