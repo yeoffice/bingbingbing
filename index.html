@@ -99,6 +99,11 @@
   .reg-input::placeholder{color:#7d9fbb}
   .reg-err{min-height:18px;margin-top:8px;font-size:12.5px;color:#ff9b9b}
   .ov-btn:disabled{opacity:.5;cursor:not-allowed}
+  #cardErr{min-height:16px;margin-top:6px;font-size:12px;color:#ff9b9b;text-align:center}
+  #cardBtn{margin-top:6px}
+  #admOut{display:none;width:100%;margin-top:10px;background:rgba(10,26,46,.8);
+    border:1px solid rgba(140,210,255,.35);border-radius:12px;color:#bfe9ff;
+    font-size:12.5px;padding:10px;resize:none;outline:none;font-family:monospace}
 </style>
 </head>
 <body>
@@ -158,9 +163,14 @@
     <h2 id="ovTitle">我 了 叹 · 本局终结</h2>
     <div class="ov-stat" id="ovStat"></div>
     <button class="ov-btn" id="reviveBtn">复活</button>
+    <div id="cardRow" style="display:none">
+      <input class="reg-input" id="cardInput" maxlength="24" placeholder="输入卡密复活（不占每日命数）">
+      <div id="cardErr"></div>
+      <button class="ov-btn" id="cardBtn">🎟️ 使用卡密复活</button>
+    </div>
     <button class="ov-btn" id="rankBtn">🏆 查看排行榜</button>
     <div id="ovRankLine" style="margin-top:8px;font-size:12px;color:#ffd98a;min-height:16px"></div>
-    <div class="ov-tip">每天 2 条命：第 1 条命终结可<b>复活并找回</b>冰封值（第 2 条命）<br>第 2 条命再终结＝当天结束，清空的冰封值<b>第二天不找回</b>，0 点后恢复 2 条命</div>
+    <div class="ov-tip">每天 2 条命：第 1 条命终结可<b>复活并找回</b>冰封值（第 2 条命）<br>第 2 条命再终结＝当天结束，清空的冰封值<b>第二天不找回</b>，0 点后恢复 2 条命<br>每天命用完后，可用<b>卡密</b>复活并找回死前冰封值（卡密一次性）</div>
   </div>
 </div>
 
@@ -172,6 +182,20 @@
     <div class="reg-err" id="regErr"></div>
     <button class="ov-btn" id="regBtn">开 始 游 玩</button>
     <div class="ov-tip">用户名会显示在排行榜上<br>禁止与已有用户重名，请取一个独特的名字</div>
+  </div>
+</div>
+
+<div id="adminMask" class="hidden">
+  <div class="ov-card">
+    <div class="ov-emoji">🎟️</div>
+    <h2>卡密生成 · 管理</h2>
+    <input class="reg-input" id="admCount" type="number" min="1" max="100" value="10" placeholder="生成数量（1-100）">
+    <input class="reg-input" id="admSecret" type="password" placeholder="管理密钥">
+    <div class="reg-err" id="admErr"></div>
+    <button class="ov-btn" id="admBtn">生 成 卡 密</button>
+    <textarea id="admOut" rows="6" readonly placeholder="生成的卡密会显示在这里"></textarea>
+    <button class="ov-btn" id="admClose" style="background:rgba(255,255,255,.1);color:#8fb6d6;box-shadow:none">关 闭</button>
+    <div class="ov-tip">卡密为一次性复活券：玩家每天 2 命用完后<br>输入卡密即可复活并找回死前的冰封值</div>
   </div>
 </div>
 
@@ -196,6 +220,12 @@
   var elRankLine=document.getElementById('rankLine'), elNick=document.getElementById('nickInput');
   var elRegMask=document.getElementById('regMask'), elRegInput=document.getElementById('regInput'),
       elRegErr=document.getElementById('regErr'), elRegBtn=document.getElementById('regBtn');
+  var elCardRow=document.getElementById('cardRow'), elCardInput=document.getElementById('cardInput'),
+      elCardErr=document.getElementById('cardErr'), elCardBtn=document.getElementById('cardBtn');
+  var elAdminMask=document.getElementById('adminMask'), elAdmCount=document.getElementById('admCount'),
+      elAdmSecret=document.getElementById('admSecret'), elAdmErr=document.getElementById('admErr'),
+      elAdmBtn=document.getElementById('admBtn'), elAdmOut=document.getElementById('admOut'),
+      elAdmClose=document.getElementById('admClose');
 
   /* ===== 状态：每天 2 条命。命死冰封值清空、不找回；复活只换第 2 条命（从 0 开始） ===== */
   var st = { fz:0, shown:0, rolls:0, ends:0, revives:0, pIce:0.99, dead:false, deadDate:'', reviveDate:'' };
@@ -232,6 +262,7 @@
     syncUI(); syncReviveBtn();
   }
   if(new URLSearchParams(location.search).get('reset')==='1') doReset();
+  if(new URLSearchParams(location.search).get('admin')==='1') elAdminMask.classList.remove('hidden');
 
   /* ---------- 音频（原版同款） ---------- */
   function play(a){ try{ a.pause(); a.currentTime=0; var p=a.play(); if(p&&p.catch) p.catch(function(){}); }catch(e){} }
@@ -456,6 +487,7 @@
     elOver.classList.remove('hidden');
   }
   function syncReviveBtn(){
+    elCardRow.style.display = usedReviveToday() ? 'block' : 'none';
     if(usedReviveToday()){
       elRevive.className='ov-btn ghost';
       elRevive.textContent='今天命已用完 · 明天 0 点后恢复';
@@ -485,6 +517,89 @@
     if(usedReviveToday()){ elQuote.textContent='今天命已用完，明天 0 点后可复活'; return; }
     doRevive();
   });
+
+  /* ---------- 卡密复活（一次性复活券，不占每日命数） ---------- */
+  var cardBusy=false;
+  function doCardRevive(code){
+    st.fz = st.lastFz || 0;
+    st.revives++; st.dead=false;
+    saveState({fz:String(Math.floor(st.fz))});
+    elOver.classList.add('hidden');
+    elCardInput.value=''; elCardErr.textContent='';
+    elBtn.disabled=false; elBtn.textContent='再 抽 一 次';
+    elOrb.textContent='❄️'; elVerdict.className=''; elVerdict.textContent='卡密复活成功';
+    elQuote.textContent='卡密复活：找回 '+fmt(st.fz)+'% 冰封值，接着冲！';
+    flash('warm'); syncUI(); syncReviveBtn();
+    submitRank(true);
+  }
+  function useCardCode(){
+    if(st.dead!==true || cardBusy) return;
+    var code=elCardInput.value.trim();
+    if(!code){ elCardErr.textContent='请输入卡密'; return; }
+    cardBusy=true; elCardBtn.disabled=true; elCardErr.textContent='卡密校验中…';
+    var cardErrBack=function(msg){ elCardErr.textContent=msg; elCardBtn.disabled=false; cardBusy=false; };
+    fetch(SUPA_URL+'/rest/v1/ice_cards?select=code&code=eq.'+encodeURIComponent(code)+'&used=is.false', {headers:SUPA_HDR})
+      .then(function(r){ return r.json().then(function(j){ return {ok:r.ok, status:r.status, data:j}; }); })
+      .then(function(res){
+        if(!res.ok) throw new Error('HTTP '+res.status);
+        if(!Array.isArray(res.data) || !res.data.length){
+          cardErrBack('卡密无效或已被使用'); return;
+        }
+        /* 条件更新核销：只有仍是未使用状态才改得掉，天然防重复使用/抢卡 */
+        return fetch(SUPA_URL+'/rest/v1/ice_cards?code=eq.'+encodeURIComponent(code)+'&used=is.false', {
+          method:'PATCH',
+          headers:Object.assign({Prefer:'return=representation'}, SUPA_HDR),
+          body:JSON.stringify({ used:true, used_by:nick, used_at:new Date().toISOString() })
+        }).then(function(r2){
+          return r2.json().then(function(j2){ return {ok:r2.ok, status:r2.status, data:j2}; });
+        }).then(function(res2){
+          if(res2.ok && Array.isArray(res2.data) && res2.data.length){
+            doCardRevive(code);
+            cardBusy=false; elCardBtn.disabled=false;
+          }else if(res2.ok){
+            cardErrBack('手慢了，这张卡密刚被别人用掉');
+          }else{
+            cardErrBack('卡密核销失败 HTTP '+res2.status);
+          }
+        });
+      })
+      .catch(function(e){ cardErrBack('卡密校验网络错误：'+(e&&e.message?e.message:e)); });
+  }
+  elCardBtn.addEventListener('click', useCardCode);
+  elCardInput.addEventListener('keydown', function(e){ if(e.key==='Enter') useCardCode(); });
+
+  /* ---------- 管理面板：生成卡密（?admin=1 打开，密钥校验在服务端函数里） ---------- */
+  elAdmBtn.addEventListener('click', function(){
+    var n=parseInt(elAdmCount.value,10)||0, s=elAdmSecret.value;
+    elAdmErr.textContent='';
+    if(n<1||n>100){ elAdmErr.textContent='生成数量需在 1-100 之间'; return; }
+    if(!s){ elAdmErr.textContent='请输入管理密钥'; return; }
+    elAdmBtn.disabled=true; elAdmErr.textContent='生成中…';
+    fetch(SUPA_URL+'/rest/v1/rpc/create_cards', {
+      method:'POST', headers:SUPA_HDR,
+      body:JSON.stringify({ p_count:n, p_secret:s })
+    }).then(function(r){
+      return r.json().then(function(j){ return {ok:r.ok, status:r.status, data:j}; });
+    }).then(function(res){
+      elAdmBtn.disabled=false;
+      if(!res.ok){
+        var msg=(res.data && res.data.message) ? res.data.message : ((''+JSON.stringify(res.data)).slice(0,140));
+        elAdmErr.textContent='生成失败 HTTP '+res.status+'：'+msg;
+        return;
+      }
+      if(!Array.isArray(res.data) || !res.data.length){
+        elAdmErr.textContent='生成失败：服务端未返回卡密';
+        return;
+      }
+      elAdmErr.textContent='生成成功，共 '+res.data.length+' 张，请复制保存：';
+      elAdmOut.style.display='block';
+      elAdmOut.value=res.data.join('\n');
+    }).catch(function(e){
+      elAdmBtn.disabled=false;
+      elAdmErr.textContent='网络错误：'+(e&&e.message?e.message:e);
+    });
+  });
+  elAdmClose.addEventListener('click', function(){ elAdminMask.classList.add('hidden'); });
 
   /* ===== 排行榜：可选 Supabase API（全网共享，只显示活人当前冰封值），未配置回退本地榜 ===== */
   var SUPA_URL='https://rmrjnvjakmgsqbcsyvts.supabase.co';  /* Supabase 项目地址（不带 /rest/v1/） */
