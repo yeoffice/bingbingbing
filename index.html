@@ -543,7 +543,9 @@
     if(!code){ elCardErr.textContent='请输入卡密'; return; }
     cardBusy=true; elCardBtn.disabled=true; elCardErr.textContent='卡密校验中…';
     var cardErrBack=function(msg){ elCardErr.textContent=msg; elCardBtn.disabled=false; cardBusy=false; };
-    fetch(SUPA_URL+'/rest/v1/ice_cards?select=code&code=eq.'+encodeURIComponent(code)+'&used=is.false', {headers:SUPA_HDR})
+    var verifyUrl=SUPA_URL+'/rest/v1/ice_cards?select=code&code=eq.'+encodeURIComponent(code)+'&used=is.false';
+    function tryVerify(attempt){
+      fetchTO(verifyUrl, {headers:SUPA_HDR}, 12000)
       .then(function(r){ return r.json().then(function(j){ return {ok:r.ok, status:r.status, data:j}; }); })
       .then(function(res){
         if(!res.ok) throw new Error('HTTP '+res.status);
@@ -551,11 +553,11 @@
           cardErrBack('卡密无效或已被使用'); return;
         }
         /* 条件更新核销：只有仍是未使用状态才改得掉，天然防重复使用/抢卡 */
-        return fetch(SUPA_URL+'/rest/v1/ice_cards?code=eq.'+encodeURIComponent(code)+'&used=is.false', {
+        return fetchTO(SUPA_URL+'/rest/v1/ice_cards?code=eq.'+encodeURIComponent(code)+'&used=is.false', {
           method:'PATCH',
           headers:Object.assign({Prefer:'return=representation'}, SUPA_HDR),
           body:JSON.stringify({ used:true, used_by:nick, used_at:new Date().toISOString() })
-        }).then(function(r2){
+        }, 12000).then(function(r2){
           return r2.json().then(function(j2){ return {ok:r2.ok, status:r2.status, data:j2}; });
         }).then(function(res2){
           if(res2.ok && Array.isArray(res2.data) && res2.data.length){
@@ -568,7 +570,17 @@
           }
         });
       })
-      .catch(function(e){ cardErrBack('卡密校验网络错误：'+(e&&e.message?e.message:e)); });
+      .catch(function(e){
+        /* 网络层失败自动重试一次，仍失败再报错 */
+        if(attempt<1){
+          elCardErr.textContent='网络不稳，正在重试…';
+          setTimeout(function(){ tryVerify(attempt+1); }, 1500);
+          return;
+        }
+        cardErrBack('连不上验证服务器（该网络可能拦截了外网服务）：请切换 WiFi/流量，或关闭代理、广告拦截插件后再点一次');
+      });
+    }
+    tryVerify(0);
   }
   elCardBtn.addEventListener('click', useCardCode);
   elCardInput.addEventListener('keydown', function(e){ if(e.key==='Enter') useCardCode(); });
@@ -580,10 +592,10 @@
     if(n<1||n>100){ elAdmErr.textContent='生成数量需在 1-100 之间'; return; }
     if(!s){ elAdmErr.textContent='请输入管理密钥'; return; }
     elAdmBtn.disabled=true; elAdmErr.textContent='生成中…';
-    fetch(SUPA_URL+'/rest/v1/rpc/create_cards', {
+    fetchTO(SUPA_URL+'/rest/v1/rpc/create_cards', {
       method:'POST', headers:SUPA_HDR,
       body:JSON.stringify({ p_count:n, p_secret:s })
-    }).then(function(r){
+    }, 15000).then(function(r){
       return r.json().then(function(j){ return {ok:r.ok, status:r.status, data:j}; });
     }).then(function(res){
       elAdmBtn.disabled=false;
@@ -617,7 +629,7 @@
       url=SUPA_URL+'/rest/v1/ice_cards?select=code,used,used_by,used_at,created_at&order=created_at.desc&limit=200';
     }
     elAdmQuery.disabled=true; elAdmErr.textContent='查询中…';
-    fetch(url, {headers:SUPA_HDR})
+    fetchTO(url, {headers:SUPA_HDR}, 12000)
       .then(function(r){ return r.json().then(function(j){ return {ok:r.ok, status:r.status, data:j}; }); })
       .then(function(res){
         elAdmQuery.disabled=false;
@@ -650,10 +662,18 @@
   });
 
   /* ===== 排行榜：可选 Supabase API（全网共享，只显示活人当前冰封值），未配置回退本地榜 ===== */
-  var SUPA_URL='https://rmrjnvjakmgsqbcsyvts.supabase.co';  /* Supabase 项目地址（不带 /rest/v1/） */
+  var SUPA_URL='https://plain-boat-bf8b.sky-toolbox-1762510.workers.dev';  /* Cloudflare Worker 反代（转发到 Supabase，国内直连更稳） */
   var SUPA_KEY='sb_publishable_CMgpc6NxT3DI7A0woFR0hw_efHU2qyZ';  /* Publishable key（公钥） */
   var SUPA_HDR={ apikey:SUPA_KEY, Authorization:'Bearer '+SUPA_KEY, 'content-type':'application/json' };
   var lastPushTs=0, pushBusy=false, lastApiSubmitErr='';
+  /* 带超时的 fetch：直连 Supabase 在部分网络下会长时间挂起，超时快速失败 */
+  function fetchTO(url, opts, ms){
+    if(!opts) opts={};
+    var ctl=('AbortController' in window)?new AbortController():null;
+    if(ctl) opts.signal=ctl.signal;
+    var timer=setTimeout(function(){ if(ctl) ctl.abort(); }, ms||12000);
+    return fetch(url, opts).then(function(r){ clearTimeout(timer); return r; }, function(e){ clearTimeout(timer); throw e; });
+  }
   function pushProgress(force){
     var now=Date.now();
     if(!force && now-lastPushTs<15000) return;
@@ -667,10 +687,10 @@
     /* API 榜：按用户名 upsert（name 主键 → 天然禁止重名），score=0 即掉榜 */
     if(SUPA_URL && SUPA_KEY){
       try{
-        fetch(SUPA_URL+'/rest/v1/ice_scores', {
+        fetchTO(SUPA_URL+'/rest/v1/ice_scores', {
           method:'POST', headers:Object.assign({Prefer:'resolution=merge-duplicates'}, SUPA_HDR),
           body:JSON.stringify([{ name:nick, score:score, ts:Date.now() }])
-        }).then(function(r){
+        }, 12000).then(function(r){
           return r.text().then(function(t){
             if(!r.ok){
               lastApiSubmitErr='分数提交失败 HTTP '+r.status+'：'+(t||'').slice(0,160);
@@ -728,7 +748,7 @@
   }
   function apiShow(){
     var myScore=Math.floor(st.fz);
-    fetch(SUPA_URL+'/rest/v1/ice_scores?select=name,score&score=gt.0&order=score.desc&limit=10', {headers:SUPA_HDR})
+    fetchTO(SUPA_URL+'/rest/v1/ice_scores?select=name,score&score=gt.0&order=score.desc&limit=10', {headers:SUPA_HDR}, 12000)
       .then(function(r){
         return r.json().then(function(j){ return {ok:r.ok, status:r.status, data:j}; });
       })
@@ -756,8 +776,8 @@
         var out=lines.join('<br>');
         elRankLine.innerHTML=out;
         if(myScore>0){
-          fetch(SUPA_URL+'/rest/v1/ice_scores?select=name&score=gt.'+myScore,
-            {headers:Object.assign({'Prefer':'count=exact','Range':'0-0'}, SUPA_HDR)})
+          fetchTO(SUPA_URL+'/rest/v1/ice_scores?select=name&score=gt.'+myScore,
+            {headers:Object.assign({'Prefer':'count=exact','Range':'0-0'}, SUPA_HDR)}, 12000)
             .then(function(r2){
               var mm=/\/(\d+)/.exec(r2.headers.get('content-range')||'');
               var rank=mm?(parseInt(mm[1],10)+1):1;
