@@ -199,7 +199,7 @@
     <button class="ov-btn" id="admQuery" style="background:rgba(255,255,255,.1);color:#bfdcf2;box-shadow:none;font-weight:600">🔍 查 询 卡 密</button>
     <textarea id="admOut" rows="6" readonly placeholder="生成的卡密 / 查询结果会显示在这里"></textarea>
     <button class="ov-btn" id="admClose" style="background:rgba(255,255,255,.1);color:#8fb6d6;box-shadow:none">关 闭</button>
-    <div class="ov-tip">卡密为一次性复活券：玩家每天 2 命用完后<br>输入卡密即可复活并找回死前的冰封值</div>
+    <div class="ov-tip">卡密为一次性复活券：玩家每天 2 命用完后<br>输入卡密即可复活并找回死前的冰封值<br>生成与查询均需管理密钥，请勿泄露</div>
   </div>
 </div>
 
@@ -546,32 +546,24 @@
     if(!code){ elCardErr.textContent='请输入卡密'; return; }
     cardBusy=true; elCardBtn.disabled=true; elCardErr.textContent='卡密校验中…';
     var cardErrBack=function(msg){ elCardErr.textContent=msg; elCardBtn.disabled=false; cardBusy=false; };
-    var verifyPath='/rest/v1/ice_cards?select=code&code=eq.'+encodeURIComponent(code)+'&used=is.false';
+    /* 服务端核销：一次 RPC 完成“查是否有效+标记已用”，带行锁防并发，无需表读权限 */
     function tryVerify(attempt){
-      apiFetch(verifyPath, {headers:SUPA_HDR}, 12000)
+      apiFetch('/rest/v1/rpc/consume_card', {
+        method:'POST', headers:SUPA_HDR,
+        body:JSON.stringify({ p_code:code, p_user:nick })
+      }, 12000)
       .then(function(r){ return r.json().then(function(j){ return {ok:r.ok, status:r.status, data:j}; }); })
       .then(function(res){
-        if(!res.ok) throw new Error('HTTP '+res.status);
-        if(!Array.isArray(res.data) || !res.data.length){
-          cardErrBack('卡密无效或已被使用'); return;
+        if(!res.ok){
+          var msg=(res.data && res.data.message) ? res.data.message : ('卡密核销失败 HTTP '+res.status);
+          cardErrBack(msg); return;
         }
-        /* 条件更新核销：只有仍是未使用状态才改得掉，天然防重复使用/抢卡 */
-        return apiFetch('/rest/v1/ice_cards?code=eq.'+encodeURIComponent(code)+'&used=is.false', {
-          method:'PATCH',
-          headers:Object.assign({Prefer:'return=representation'}, SUPA_HDR),
-          body:JSON.stringify({ used:true, used_by:nick, used_at:new Date().toISOString() })
-        }, 12000).then(function(r2){
-          return r2.json().then(function(j2){ return {ok:r2.ok, status:r2.status, data:j2}; });
-        }).then(function(res2){
-          if(res2.ok && Array.isArray(res2.data) && res2.data.length){
-            doCardRevive(code);
-            cardBusy=false; elCardBtn.disabled=false;
-          }else if(res2.ok){
-            cardErrBack('手慢了，这张卡密刚被别人用掉');
-          }else{
-            cardErrBack('卡密核销失败 HTTP '+res2.status);
-          }
-        });
+        if(res.data===true){
+          doCardRevive(code);
+          cardBusy=false; elCardBtn.disabled=false;
+        }else{
+          cardErrBack('卡密无效或已被使用');
+        }
       })
       .catch(function(e){
         /* 网络层失败自动重试一次，仍失败再报错 */
@@ -624,15 +616,14 @@
   elAdmQuery.addEventListener('click', function(){
     if(elAdmQuery.disabled) return;
     var code=elAdmCode.value.trim();
+    var s=elAdmSecret.value;
     elAdmErr.textContent='';
-    var path;
-    if(code){
-      path='/rest/v1/ice_cards?select=code,used,used_by,used_at,created_at&code=eq.'+encodeURIComponent(code);
-    }else{
-      path='/rest/v1/ice_cards?select=code,used,used_by,used_at,created_at&order=created_at.desc&limit=200';
-    }
+    if(!s){ elAdmErr.textContent='查询前请输入管理密钥'; return; }
     elAdmQuery.disabled=true; elAdmErr.textContent='查询中…';
-    apiFetch(path, {headers:SUPA_HDR}, 12000)
+    apiFetch('/rest/v1/rpc/list_cards', {
+      method:'POST', headers:SUPA_HDR,
+      body:JSON.stringify({ p_secret:s })
+    }, 12000)
       .then(function(r){ return r.json().then(function(j){ return {ok:r.ok, status:r.status, data:j}; }); })
       .then(function(res){
         elAdmQuery.disabled=false;
@@ -642,6 +633,7 @@
           return;
         }
         var list=Array.isArray(res.data)?res.data:[];
+        if(code) list=list.filter(function(c){ return c && c.code===code; });
         if(!list.length){
           elAdmErr.textContent=code ? '没有这张卡：卡密不存在（注意大小写和横杠）' : '库里还没有任何卡密';
           return;
