@@ -383,6 +383,9 @@
   /* ---------- 用户名（首次强制注册，排行榜禁止重名） ---------- */
   function loadBoard(){ try{ return JSON.parse(localStorage.getItem('ice99_board'))||[]; }catch(e){ return []; } }
   function saveBoard(b){ try{ localStorage.setItem('ice99_board', JSON.stringify(b)); }catch(e){} }
+  /* 离线补交队列：断网期间的最高分先存本地，网络恢复后随下次提交一起补上 */
+  function loadPending(){ try{ return JSON.parse(localStorage.getItem('ice99_pending'))||null; }catch(e){ return null; } }
+  function savePending(p){ try{ localStorage.setItem('ice99_pending', JSON.stringify(p)); }catch(e){} }
   var nick='';
   var BAD_WORDS=['管理','管理员','admin','官方','客服','系统','举报',
     '傻逼','煞笔','傻b','沙比','牛逼','尼玛','你妈','草泥马','操你','日你','妈的','妈逼',
@@ -543,9 +546,9 @@
     if(!code){ elCardErr.textContent='请输入卡密'; return; }
     cardBusy=true; elCardBtn.disabled=true; elCardErr.textContent='卡密校验中…';
     var cardErrBack=function(msg){ elCardErr.textContent=msg; elCardBtn.disabled=false; cardBusy=false; };
-    var verifyUrl=SUPA_URL+'/rest/v1/ice_cards?select=code&code=eq.'+encodeURIComponent(code)+'&used=is.false';
+    var verifyPath='/rest/v1/ice_cards?select=code&code=eq.'+encodeURIComponent(code)+'&used=is.false';
     function tryVerify(attempt){
-      fetchTO(verifyUrl, {headers:SUPA_HDR}, 12000)
+      apiFetch(verifyPath, {headers:SUPA_HDR}, 12000)
       .then(function(r){ return r.json().then(function(j){ return {ok:r.ok, status:r.status, data:j}; }); })
       .then(function(res){
         if(!res.ok) throw new Error('HTTP '+res.status);
@@ -553,7 +556,7 @@
           cardErrBack('卡密无效或已被使用'); return;
         }
         /* 条件更新核销：只有仍是未使用状态才改得掉，天然防重复使用/抢卡 */
-        return fetchTO(SUPA_URL+'/rest/v1/ice_cards?code=eq.'+encodeURIComponent(code)+'&used=is.false', {
+        return apiFetch('/rest/v1/ice_cards?code=eq.'+encodeURIComponent(code)+'&used=is.false', {
           method:'PATCH',
           headers:Object.assign({Prefer:'return=representation'}, SUPA_HDR),
           body:JSON.stringify({ used:true, used_by:nick, used_at:new Date().toISOString() })
@@ -592,7 +595,7 @@
     if(n<1||n>100){ elAdmErr.textContent='生成数量需在 1-100 之间'; return; }
     if(!s){ elAdmErr.textContent='请输入管理密钥'; return; }
     elAdmBtn.disabled=true; elAdmErr.textContent='生成中…';
-    fetchTO(SUPA_URL+'/rest/v1/rpc/create_cards', {
+    apiFetch('/rest/v1/rpc/create_cards', {
       method:'POST', headers:SUPA_HDR,
       body:JSON.stringify({ p_count:n, p_secret:s })
     }, 15000).then(function(r){
@@ -622,14 +625,14 @@
     if(elAdmQuery.disabled) return;
     var code=elAdmCode.value.trim();
     elAdmErr.textContent='';
-    var url;
+    var path;
     if(code){
-      url=SUPA_URL+'/rest/v1/ice_cards?select=code,used,used_by,used_at,created_at&code=eq.'+encodeURIComponent(code);
+      path='/rest/v1/ice_cards?select=code,used,used_by,used_at,created_at&code=eq.'+encodeURIComponent(code);
     }else{
-      url=SUPA_URL+'/rest/v1/ice_cards?select=code,used,used_by,used_at,created_at&order=created_at.desc&limit=200';
+      path='/rest/v1/ice_cards?select=code,used,used_by,used_at,created_at&order=created_at.desc&limit=200';
     }
     elAdmQuery.disabled=true; elAdmErr.textContent='查询中…';
-    fetchTO(url, {headers:SUPA_HDR}, 12000)
+    apiFetch(path, {headers:SUPA_HDR}, 12000)
       .then(function(r){ return r.json().then(function(j){ return {ok:r.ok, status:r.status, data:j}; }); })
       .then(function(res){
         elAdmQuery.disabled=false;
@@ -662,7 +665,13 @@
   });
 
   /* ===== 排行榜：可选 Supabase API（全网共享，只显示活人当前冰封值），未配置回退本地榜 ===== */
-  var SUPA_URL='https://plain-boat-bf8b.sky-toolbox-1762510.workers.dev';  /* Cloudflare Worker 反代（转发到 Supabase，国内直连更稳） */
+  /* 双线路自动切换：主线路连不上（超时/网络错误）自动换备用线路重试一次 */
+  var SUPA_URLS=[
+    'https://plain-boat-bf8b.sky-toolbox-1762510.workers.dev',         /* 线路1：Worker → 你的服务器 → Supabase（https，GitHub 页可用） */
+    'https://rmrjnvjakmgsqbcsyvts.supabase.co',                        /* 线路2：Supabase 直连 */
+    'http://123.206.210.20:8123/api'                                   /* 线路3：服务器直连（仅 http 页面可用） */
+  ];
+  var supaIdx=0;
   var SUPA_KEY='sb_publishable_CMgpc6NxT3DI7A0woFR0hw_efHU2qyZ';  /* Publishable key（公钥） */
   var SUPA_HDR={ apikey:SUPA_KEY, Authorization:'Bearer '+SUPA_KEY, 'content-type':'application/json' };
   var lastPushTs=0, pushBusy=false, lastApiSubmitErr='';
@@ -672,7 +681,28 @@
     var ctl=('AbortController' in window)?new AbortController():null;
     if(ctl) opts.signal=ctl.signal;
     var timer=setTimeout(function(){ if(ctl) ctl.abort(); }, ms||12000);
-    return fetch(url, opts).then(function(r){ clearTimeout(timer); return r; }, function(e){ clearTimeout(timer); throw e; });
+    return fetch(url, opts).then(function(r){ clearTimeout(timer); return r; }, function(e){
+      clearTimeout(timer);
+      if(e && (e.name==='AbortError' || /abort/i.test(''+(e&&e.message||'')))){
+        throw new Error('请求超时（当前网络连不上服务器）');
+      }
+      throw e;
+    });
+  }
+  /* API 请求封装：走当前线路，网络层失败自动切到另一条线路重试一次 */
+  function apiFetch(path, opts, ms){
+    var tryUrl=function(idx){
+      return fetchTO(SUPA_URLS[idx]+path, opts, ms).then(null, function(e){
+        var msg=''+(e&&e.message||e);
+        var netFail=(idx!==undefined) && (/超时|Failed to fetch|NetworkError|网络/i.test(msg));
+        if(netFail && SUPA_URLS.length>1){
+          supaIdx=(supaIdx+1)%SUPA_URLS.length;
+          if(supaIdx!==idx) return tryUrl(supaIdx);
+        }
+        throw e;
+      });
+    };
+    return tryUrl(supaIdx);
   }
   function pushProgress(force){
     var now=Date.now();
@@ -684,19 +714,36 @@
     if(pushBusy) return;
     pushBusy=true;
     var score=Math.floor(st.fz);
+    var pend=loadPending();
+    var rows=[{ name:nick, score:score, ts:Date.now() }];
+    /* 带上之前断网期间没交出去的最高分 */
+    if(pend && pend.score>0 && pend.score>score){
+      rows.push({ name:nick, score:pend.score, ts:pend.ts||Date.now() });
+    }
     /* API 榜：按用户名 upsert（name 主键 → 天然禁止重名），score=0 即掉榜 */
-    if(SUPA_URL && SUPA_KEY){
+    if(SUPA_URLS.length && SUPA_KEY){
       try{
-        fetchTO(SUPA_URL+'/rest/v1/ice_scores', {
+        apiFetch('/rest/v1/ice_scores', {
           method:'POST', headers:Object.assign({Prefer:'resolution=merge-duplicates'}, SUPA_HDR),
-          body:JSON.stringify([{ name:nick, score:score, ts:Date.now() }])
+          body:JSON.stringify(rows)
         }, 12000).then(function(r){
           return r.text().then(function(t){
-            if(!r.ok){
+            if(r.ok){
+              lastApiSubmitErr='';
+              savePending(null);      /* 本次连旧账一起交清了 */
+            }else{
+              if(score>0 || (pend&&pend.score>0)){
+                savePending({ score:Math.max(score, (pend&&pend.score)||0), ts:(pend&&pend.ts)||Date.now() });
+              }
               lastApiSubmitErr='分数提交失败 HTTP '+r.status+'：'+(t||'').slice(0,160);
-            } else { lastApiSubmitErr=''; }
+            }
           });
-        }).catch(function(e){ lastApiSubmitErr='分数提交网络错误：'+(e&&e.message?e.message:e); })
+        }).catch(function(e){
+          if(score>0 || (pend&&pend.score>0)){
+            savePending({ score:Math.max(score, (pend&&pend.score)||0), ts:(pend&&pend.ts)||Date.now() });
+          }
+          lastApiSubmitErr='分数提交网络错误（已存本地，恢复后自动补交）：'+(e&&e.message?e.message:e);
+        })
         .then(function(){ pushBusy=false; });
       }catch(e){ lastApiSubmitErr='分数提交异常：'+e; pushBusy=false; }
     }else{
@@ -709,14 +756,14 @@
     saveBoard(board);
   }
   function showBoard(){
-    if(SUPA_URL && SUPA_KEY){
+    if(SUPA_URLS.length && SUPA_KEY){
       submitRank(true);            /* 先上报当前冰封值 */
       setTimeout(apiShow, 700);    /* 等提交落地再拉榜 */
       return;
     }
     localShow();
   }
-  function localShow(){
+  function localShow(note){
     var board=loadBoard(), best={};
     for(var i=0;i<board.length;i++){
       var b=board[i];
@@ -735,7 +782,7 @@
     for(var j=0;j<alive.length;j++){
       lines.push((j+1)+'. '+(alive[j].name||'匿名')+' · '+fmt(alive[j].score)+'%');
     }
-    var out=lines.join('<br>');
+    var out=(note?'<span style="color:#ffd98a">'+note+'</span><br>':'')+lines.join('<br>');
     var myScore=Math.floor(st.fz);
     if(myScore>0){
       var rank=1;
@@ -748,7 +795,7 @@
   }
   function apiShow(){
     var myScore=Math.floor(st.fz);
-    fetchTO(SUPA_URL+'/rest/v1/ice_scores?select=name,score&score=gt.0&order=score.desc&limit=10', {headers:SUPA_HDR}, 12000)
+    apiFetch('/rest/v1/ice_scores?select=name,score&score=gt.0&order=score.desc&limit=10', {headers:SUPA_HDR}, 12000)
       .then(function(r){
         return r.json().then(function(j){ return {ok:r.ok, status:r.status, data:j}; });
       })
@@ -776,7 +823,7 @@
         var out=lines.join('<br>');
         elRankLine.innerHTML=out;
         if(myScore>0){
-          fetchTO(SUPA_URL+'/rest/v1/ice_scores?select=name&score=gt.'+myScore,
+          apiFetch('/rest/v1/ice_scores?select=name&score=gt.'+myScore,
             {headers:Object.assign({'Prefer':'count=exact','Range':'0-0'}, SUPA_HDR)}, 12000)
             .then(function(r2){
               var mm=/\/(\d+)/.exec(r2.headers.get('content-range')||'');
@@ -788,9 +835,8 @@
         }
       })
       .catch(function(e){
-        var em='榜单拉取失败：'+(e&&e.message?e.message:'网络错误');
-        elRankLine.innerHTML='<span style="color:#ff9b9b">'+em+'</span>';
-        elOvRank.innerHTML='<span style="color:#ff9b9b">'+em+'</span>';
+        /* 拉榜失败：回退显示本地记录，分数不会丢（断网期间的会在恢复后补交） */
+        localShow('（网络不通，暂显本地记录）');
       });
   }
   elRankBtn.addEventListener('click', showBoard);
@@ -815,6 +861,7 @@
     loadState();
     syncUI(); syncReviveBtn();
     if(!hasNick){ showReg(); }
+    if(hasNick && (st.fz>0 || loadPending())) submitRank(true);   /* 开页先补交断网期间的分数 */
     if(diedToday() && usedReviveToday() && st.fz<=0){
       /* 今天复活过又死了：今天结束 */
       st.dead=true; gameOver();
