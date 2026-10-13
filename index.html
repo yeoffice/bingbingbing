@@ -237,36 +237,98 @@
 
   /* ===== 本地持久化 ===== */
   var KEYS=['fz','ends','deadDate','reviveDate'];
-  function lsSet(k,v){ try{ localStorage.setItem('ice99_'+k, v); }catch(e){} }
+  var STATE_KEY='ice99_state', stateRev=null, stateConflict=false;
+  function lsSet(k,v){ try{ localStorage.setItem('ice99_'+k, v); return true; }catch(e){ return false; } }
   function lsGet(k){ try{ return localStorage.getItem('ice99_'+k); }catch(e){ return null; } }
   function lsDel(k){ try{ localStorage.removeItem('ice99_'+k); }catch(e){} }
   function today(){ var d=new Date(); return d.getFullYear()+'-'+(d.getMonth()+1)+'-'+d.getDate(); }
-
-  function loadState(){
+  function readStoredState(){
     try{
-      var f=parseFloat(lsGet('fz')); if(!isNaN(f)&&f>0) st.fz=f;
-      var e=parseInt(lsGet('ends'),10); if(!isNaN(e)&&e>0) st.ends=e;
-      st.deadDate=lsGet('deadDate')||'';
-      st.reviveDate=lsGet('reviveDate')||'';
-      var lf=parseFloat(lsGet('lastFz')); if(!isNaN(lf)&&lf>0) st.lastFz=lf; else st.lastFz=0;
-    }catch(e){}
-    st.shown=st.fz;
+      var raw=localStorage.getItem(STATE_KEY), x=raw?JSON.parse(raw):null;
+      if(!x || x.v!==1 || typeof x.rev!=='number' || (x.life!=='alive' && x.life!=='dead')) return null;
+      return x;
+    }catch(e){ return null; }
   }
-  function saveState(patch){ for(var k in patch){ if(patch[k]!==undefined) lsSet(k, patch[k]); } }
+  function legacyState(){
+    var f=parseFloat(lsGet('fz')); if(isNaN(f)||f<0) f=0;
+    var e=parseInt(lsGet('ends'),10); if(isNaN(e)||e<0) e=0;
+    var dd=lsGet('deadDate')||'', rd=lsGet('reviveDate')||'', lf=parseFloat(lsGet('lastFz'));
+    if(isNaN(lf)||lf<0) lf=0;
+    var dead=dd===today() && f<=0;
+    return {v:1, rev:0, life:dead?'dead':'alive', fz:dead?0:f, ends:e,
+      deadDate:dead?dd:'', reviveDate:rd, lastFz:lf, updatedAt:Date.now()};
+  }
+  function applyStoredState(x){
+    var deadNow=x.life==='dead' && x.deadDate===today();
+    st.fz=deadNow ? 0 : Math.max(0,Number(x.fz)||0);
+    st.ends=Math.max(0,parseInt(x.ends,10)||0);
+    st.deadDate=x.deadDate||''; st.reviveDate=x.reviveDate||'';
+    st.lastFz=Math.max(0,Number(x.lastFz)||0);
+    st.dead=deadNow;
+    stateRev=x.rev; st.shown=st.fz;
+  }
+  function writeLegacyState(x){
+    lsSet('fz',String(Math.floor(x.fz||0))); lsSet('ends',String(x.ends||0));
+    lsSet('deadDate',x.deadDate||''); lsSet('reviveDate',x.reviveDate||'');
+    lsSet('lastFz',String(Math.floor(x.lastFz||0)));
+  }
+  function loadState(){
+    var x=readStoredState(), migrated=false;
+    if(!x){ x=legacyState(); migrated=true; }
+    if(x.life==='dead' && x.deadDate!==today()){
+      x.life='alive'; x.deadDate=''; x.fz=0; x.rev=(Number(x.rev)||0)+1; migrated=true;
+    }
+    applyStoredState(x);
+    if(migrated){
+      try{ localStorage.setItem(STATE_KEY,JSON.stringify(x)); }catch(e){}
+      writeLegacyState(x);
+    }
+  }
+  function syncStateFromStorage(){
+    var x=readStoredState();
+    if(!x) return true;
+    if(x.life==='dead' && x.deadDate!==today()){
+      x.life='alive'; x.deadDate=''; x.fz=0; x.rev=(Number(x.rev)||0)+1; x.updatedAt=Date.now();
+      try{ localStorage.setItem(STATE_KEY,JSON.stringify(x)); writeLegacyState(x); }catch(e){}
+    }
+    if(stateRev!==null && x.rev!==stateRev){ applyStoredState(x); stateConflict=true; return false; }
+    applyStoredState(x); return true;
+  }
+  function stateFromMemory(){
+    return {v:1, rev:stateRev===null?0:stateRev, life:st.dead?'dead':'alive', fz:Math.max(0,Number(st.fz)||0),
+      ends:Math.max(0,parseInt(st.ends,10)||0), deadDate:st.deadDate||'', reviveDate:st.reviveDate||'',
+      lastFz:Math.max(0,Number(st.lastFz)||0), updatedAt:Date.now()};
+  }
+  function saveState(patch){
+    stateConflict=false;
+    var cur=readStoredState();
+    if(cur && stateRev!==null && cur.rev!==stateRev){ applyStoredState(cur); stateConflict=true; return false; }
+    var x=cur||stateFromMemory();
+    for(var k in patch){ if(patch[k]!==undefined) x[k]=patch[k]; }
+    x.v=1; x.rev=(cur?cur.rev:(stateRev===null?0:stateRev))+1; x.updatedAt=Date.now();
+    try{ localStorage.setItem(STATE_KEY,JSON.stringify(x)); }
+    catch(e){ return false; }
+    applyStoredState(x); writeLegacyState(x); return true;
+  }
   function usedReviveToday(){ return st.reviveDate===today(); }
-  function diedToday(){ return st.deadDate===today(); }
+  function diedToday(){ return st.dead===true && st.deadDate===today(); }
 
   function doReset(){
     for(var i=0;i<KEYS.length;i++) lsDel(KEYS[i]);
-    lsDel('lastFz'); st.lastFz=0;
+    lsDel('lastFz'); lsDel('state'); st.lastFz=0;
     try{ localStorage.removeItem('ice99_board'); }catch(e){}
+    stateRev=null; stateConflict=false;
     st.fz=0; st.shown=0; st.ends=0; st.revives=0; st.dead=false; st.deadDate=''; st.reviveDate='';
     elBtn.disabled=false; elOver.classList.add('hidden');
     elVerdict.className=''; elVerdict.textContent='准备开抽';
     elOrb.textContent='❄️'; elQuote.textContent='冰封值 0%，99% 会涨、1% 会归零并终结';
     syncUI(); syncReviveBtn();
   }
-  if(new URLSearchParams(location.search).get('reset')==='1') doReset();
+  if(new URLSearchParams(location.search).get('reset')==='1'){
+    doReset();
+    /* 执行一次后把 ?reset 从地址栏里抹掉，避免每次刷新都清档 */
+    try{ history.replaceState(null,'',location.pathname); }catch(e){}
+  }
   if(new URLSearchParams(location.search).get('admin')==='1') elAdminMask.classList.remove('hidden');
 
   /* ---------- 音频（原版同款） ---------- */
@@ -457,10 +519,12 @@
     st.lastFz=before;              /* 仅展示：清空前的冰封值 */
     st.fz=0;                       /* 命死：冰封值清空，不找回 */
     st.deadDate=today();
+    st.dead=true;
+    elBtn.disabled=true;
     play(A_SIGH); flash('warm'); spawnParts();
     elOrb.textContent='🔥'; pop(elOrb);
     elVerdict.className='warm'; elVerdict.textContent='我 了 叹'; pop(elVerdict);
-    saveState({ends:String(st.ends), fz:'0', deadDate:st.deadDate, lastFz:String(before)});
+    saveState({ends:String(st.ends), fz:'0', deadDate:st.deadDate, lastFz:String(before), life:'dead'});
     if(usedReviveToday()){
       elQuote.textContent='第二条命也没了 —— 今天结束，明天 0 点后恢复 2 条命';
     }else{
@@ -468,11 +532,11 @@
     }
     syncUI();
     submitRank(true);              /* 死亡：分数清零，掉榜 */
-    setTimeout(gameOver, 1100);
+    setTimeout(function(){ if(st.dead && diedToday()) gameOver(); }, 1100);
   }
   function roll(){
     if(!checkNick()) return;
-    if(st.dead) return;
+    if(!syncStateFromStorage() || st.dead) return;
     st.rolls++;
     elBtn.textContent='再 抽 一 次';
     if(Math.random() < st.pIce) iceHit(); else sighHit();
@@ -510,7 +574,7 @@
     st.fz = st.lastFz || 0;      /* 找回第 1 条命死前的冰封值 */
     st.revives++; st.dead=false;
     st.reviveDate=today(); st.deadDate='';
-    saveState({reviveDate:st.reviveDate, deadDate:'', ends:String(st.ends), fz:String(Math.floor(st.fz))});
+    saveState({reviveDate:st.reviveDate, deadDate:'', ends:String(st.ends), fz:String(Math.floor(st.fz)), life:'alive'});
     elOver.classList.add('hidden');
     elBtn.disabled=false;
     elBtn.textContent='再 抽 一 次';
@@ -530,8 +594,8 @@
   var cardBusy=false;
   function doCardRevive(code){
     st.fz = st.lastFz || 0;
-    st.revives++; st.dead=false;
-    saveState({fz:String(Math.floor(st.fz))});
+    st.revives++; st.dead=false; st.deadDate='';
+    saveState({fz:String(Math.floor(st.fz)), deadDate:'', life:'alive'});
     elOver.classList.add('hidden');
     elCardInput.value=''; elCardErr.textContent='';
     elBtn.disabled=false; elBtn.textContent='再 抽 一 次';
@@ -841,11 +905,21 @@
   /* 页面隐藏/离开时提交当前冰封值 */
   function flush(){
     if(st.dead) return;
-    saveState({fz:String(Math.floor(st.fz)), ends:String(st.ends)});
+    if(!syncStateFromStorage() || st.dead) return;
+    saveState({fz:String(Math.floor(st.fz)), ends:String(st.ends), life:'alive'});
     submitRank(true);
   }
-  document.addEventListener('visibilitychange', function(){ if(document.hidden) flush(); });
+  function restoreDeath(){
+    syncStateFromStorage();
+    if(diedToday()){
+      st.dead=true; st.fz=0; syncUI(); gameOver();
+    }
+  }
+  document.addEventListener('visibilitychange', function(){
+    if(document.hidden) flush(); else restoreDeath();
+  });
   window.addEventListener('pagehide', flush);
+  window.addEventListener('pageshow', restoreDeath);
 
   syncUI(); syncReviveBtn(); syncRankUI();
   var hasNick = loadNick();
